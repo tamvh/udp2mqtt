@@ -10,14 +10,12 @@
 #include <strings.h>
 #include <stdlib.h>
 #include <string>
-#include <pthread.h>
-#include <zudp.h>
 #include <zmqtt.h>
-using namespace std;
-static int connFd;
+#define BUFLEN 512
+#define PORT 8888
 std::string mqtt_topic = "esp32";
-ZUdp *udp;
 ZMqtt *mqtt;
+using namespace std;
 void post_to_mqtt(const std::string& msg) {
     mqtt->publish(mqtt_topic, msg);
 }
@@ -25,59 +23,60 @@ void init_mqtt(){
     std::string mqtt_clientId = "";
     std::string mqtt_host = "localhost";
     int mqtt_port = 1883;
-
     mqtt = new ZMqtt(mqtt_clientId, mqtt_host, mqtt_port);
     mqtt->preSubscribe(mqtt_topic, 0);
     mqtt->autoReconnect(true);
     mqtt->beginConnect();
     mqtt->connect();
 }
-void *callback (void *content)
+
+void die(char *s)
 {
-    cout << "Thread No: " << pthread_self() << endl;
-    char buffer[1024];
-    while(true)
-    {
-        bzero(buffer, sizeof(buffer) + 1);
-        read(connFd, buffer, 300);
-        std::string msg (buffer);
-        cout << "Message: " << msg << endl;
-        //push to mqtt server
-        if(!msg.empty())
-            post_to_mqtt(msg);
-    }
-    cout << "\nClosing thread and conn" << endl;
-    close(connFd);
+    perror(s);
+    exit(1);
 }
 
-int main(int argc, char* argv[])
+int main(void)
 {
     init_mqtt();
-    int listenFd;
-    socklen_t len; //store size of the address
-    struct sockaddr_in clntAdd;
-    pthread_t threadA;
-    udp = new ZUdp();
-    listenFd = udp->initialize();
-    listen(listenFd, 5);
-    len = sizeof(clntAdd);
-    while (1)
+    struct sockaddr_in si_me, si_other;
+    int s, recv_len;
+    char buf[BUFLEN];
+    socklen_t slen = sizeof(si_other);
+    //create a UDP socket
+    if ((s=socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP)) == -1)
     {
-        cout << "UDP Listening" << endl;
-        connFd = accept(listenFd, (struct sockaddr *)&clntAdd, &len);
-
-        if (connFd < 0)
-        {
-            cerr << "Cannot accept connection" << endl;
-            return 0;
-        }
-        else
-        {
-            cout << "Connection successful" << endl;
-        }
-        pthread_create(&threadA, NULL, callback, NULL);
+        die((char*)"socket");
     }
-    pthread_join(threadA, NULL);
+
+    // zero out the structure
+    memset((char *) &si_me, 0, sizeof(si_me));
+
+    si_me.sin_family = AF_INET;
+    si_me.sin_port = htons(PORT);
+    si_me.sin_addr.s_addr = htonl(INADDR_ANY);
+
+    //bind socket to port
+    if( bind(s , (struct sockaddr*)&si_me, sizeof(si_me) ) == -1)
+    {
+        die((char*)"bind");
+    }
+
+    //keep listening for data
+    while(1)
+    {
+        printf("Waiting for data...");
+        fflush(stdout);
+        memset((char *) &buf, 0, sizeof(buf));
+        if ((recv_len = recvfrom(s, buf, BUFLEN, 0, (struct sockaddr *) &si_other, &slen)) == -1)
+        {
+            die((char*)"recvfrom()");
+        }
+        printf("Data: %s\n" , buf);
+        post_to_mqtt((std::string)buf);
+    }
+    close(s);
+    return 0;
 }
 
 
