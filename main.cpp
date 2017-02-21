@@ -73,7 +73,8 @@ int main(void)
             die((char*)"recvfrom()");
         }
         printf("Data: %s\n" , buf);
-        post_to_mqtt((std::string)buf);
+        std::string msg(buf, sizeof(buf));
+        post_to_mqtt(msg);
     }
     close(s);
     return 0;
